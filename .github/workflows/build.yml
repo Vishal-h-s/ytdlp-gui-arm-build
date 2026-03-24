@@ -1,0 +1,41 @@
+name: Build ytdlp-gui for aarch64
+
+on:
+  schedule:
+    - cron: '0 0 1 * *' # Runs at 00:00 on the 1st day of every month
+  workflow_dispatch: # Gives you a "Run workflow" button to trigger it manually
+
+jobs:
+  build:
+    runs-on: ubuntu-latest # The free host server
+    steps:
+      # 1. Checkout the original developer's repository directly
+      - name: Checkout upstream repository
+        uses: actions/checkout@v4
+        with:
+          repository: BKSalman/ytdlp-gui
+          ref: main
+
+      # 2. Spin up an emulated Arch Linux aarch64 container inside Ubuntu
+      - name: Build in Arch Linux ARM container
+        uses: uraimo/run-on-arch-action@v2
+        with:
+          arch: aarch64
+          distro: archlinux_latest
+          githubToken: ${{ github.token }}
+          # 3. Install dependencies and compile the Rust project natively for Arch ARM
+          run: |
+            pacman -Syu --noconfirm base-devel rustup git pkgconf
+            rustup toolchain install stable
+            rustup default stable
+            cargo build --release
+            
+            # Move the binary out so GitHub can grab it
+            cp target/release/ytdlp-gui ./ytdlp-gui-aarch64
+
+      # 4. Upload the finished binary as an artifact
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ytdlp-gui-aarch64
+          path: ./ytdlp-gui-aarch64
