@@ -1,34 +1,73 @@
-name: Build ytdlp-gui for Arch Linux
+name: Build Custom Pacman Repo
 
 on:
   schedule:
     - cron: '0 0 1 * *' 
   workflow_dispatch: 
 
+# We need these permissions so the script is allowed to publish to a webpage
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 jobs:
   build:
     runs-on: ubuntu-latest 
     steps:
-      - name: Checkout upstream repository
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          repository: BKSalman/ytdlp-gui
-          ref: main
 
-      # Run a native Arch Linux container, install tools, and build
-      - name: Build inside Arch Linux
+      - name: Build Arch Package and Repo Database
         run: |
           docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace archlinux:latest sh -c "
-            pacman -Syu --noconfirm base-devel rustup cmake pkgconf gtk3 git &&
-            rustup toolchain install stable &&
-            rustup default stable &&
-            cargo build --release &&
-            cp target/release/ytdlp-gui ./ytdlp-gui-arch &&
-            chmod 777 ./ytdlp-gui-arch
+            # 1. Update system and install packaging tools
+            pacman -Syu --noconfirm base-devel git sudo &&
+            
+            # 2. Create a non-root user (makepkg will fail if run as root)
+            useradd -m builder &&
+            echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers &&
+            chown -R builder:builder /workspace &&
+            
+            # 3. Switch to the new user, download the AUR recipe, and compile
+            su - builder -c '
+              cd /workspace &&
+              git clone https://aur.archlinux.org/ytdlp-gui.git aur-build &&
+              cd aur-build &&
+              makepkg -s --noconfirm &&
+              
+              # 4. Create a public web folder and move the finished package there
+              mkdir -p /workspace/public &&
+              cp *.pkg.tar.zst /workspace/public/ &&
+              cd /workspace/public &&
+              
+              # 5. Generate the pacman repository database
+              repo-add myrepo.db.tar.gz *.pkg.tar.zst &&
+              
+              # 6. GitHub Pages hates symlinks, so we hard-copy the database files
+              rm myrepo.db myrepo.files &&
+              cp myrepo.db.tar.gz myrepo.db &&
+              cp myrepo.files.tar.gz myrepo.files
+            '
           "
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      # 7. Package up the public folder
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: ytdlp-gui-arch
-          path: ./ytdlp-gui-arch
+          path: './public'
+
+  # 8. Publish the folder to your live GitHub Pages URL
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
