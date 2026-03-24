@@ -2,17 +2,45 @@ name: Build Custom Pacman Repo
 
 on:
   schedule:
-    - cron: '0 0 1 * *' 
+    - cron: '0 0 1 * *' # Wakes up at midnight on the 1st of every month
   workflow_dispatch: 
 
-# We need these permissions so the script is allowed to publish to a webpage
 permissions:
   contents: read
   pages: write
   id-token: write
 
 jobs:
+  check-update:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.build }}
+    steps:
+      - name: Check if new version needs building
+        id: check
+        run: |
+          # 1. Get the latest version string from the AUR API
+          VERSION=$(curl -s "https://aur.archlinux.org/rpc/?v=5&type=info&arg[]=ytdlp-gui" | jq -r '.results[0].Version')
+          echo "Latest AUR version is: $VERSION"
+          
+          # 2. Construct your live GitHub Pages URL dynamically
+          FILENAME="ytdlp-gui-${VERSION}-x86_64.pkg.tar.zst"
+          URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${FILENAME}"
+          
+          # 3. Check if that exact version is already hosted on your page
+          HTTP_STATUS=$(curl -o /dev/null -s -w "%{http_code}\n" "$URL")
+          
+          if [ "$HTTP_STATUS" -eq 200 ]; then
+            echo "Version $VERSION is already built. Cancelling workflow."
+            echo "build=false" >> $GITHUB_OUTPUT
+          else
+            echo "New version detected! Proceeding to build."
+            echo "build=true" >> $GITHUB_OUTPUT
+          fi
+
   build:
+    needs: check-update
+    if: needs.check-update.outputs.should_build == 'true' # Only runs if the check failed
     runs-on: ubuntu-latest 
     steps:
       - name: Checkout repository
@@ -21,37 +49,25 @@ jobs:
       - name: Build Arch Package and Repo Database
         run: |
           docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace archlinux:latest sh -c "
-            # 1. Update system and install packaging tools
             pacman -Syu --noconfirm base-devel git sudo &&
-            
-            # 2. Create a non-root user (makepkg will fail if run as root)
             useradd -m builder &&
             echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers &&
             chown -R builder:builder /workspace &&
-            
-            # 3. Switch to the new user, download the AUR recipe, and compile
             su - builder -c '
               cd /workspace &&
               git clone https://aur.archlinux.org/ytdlp-gui.git aur-build &&
               cd aur-build &&
               makepkg -s --noconfirm &&
-              
-              # 4. Create a public web folder and move the finished package there
               mkdir -p /workspace/public &&
               cp *.pkg.tar.zst /workspace/public/ &&
               cd /workspace/public &&
-              
-              # 5. Generate the pacman repository database
               repo-add myrepo.db.tar.gz *.pkg.tar.zst &&
-              
-              # 6. GitHub Pages hates symlinks, so we hard-copy the database files
               rm myrepo.db myrepo.files &&
               cp myrepo.db.tar.gz myrepo.db &&
               cp myrepo.files.tar.gz myrepo.files
             '
           "
 
-      # 7. Package up the public folder
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
@@ -60,13 +76,12 @@ jobs:
         with:
           path: './public'
 
-  # 8. Publish the folder to your live GitHub Pages URL
   deploy:
+    needs: build
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-    needs: build
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
