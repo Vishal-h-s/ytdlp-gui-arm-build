@@ -2,38 +2,35 @@ name: Build ytdlp-gui for aarch64
 
 on:
   schedule:
-    - cron: '0 0 1 * *' # Runs at 00:00 on the 1st day of every month
-  workflow_dispatch: # Gives you a "Run workflow" button to trigger it manually
+    - cron: '0 0 1 * *' 
+  workflow_dispatch: 
 
 jobs:
   build:
-    runs-on: ubuntu-latest # The free host server
+    runs-on: ubuntu-latest 
     steps:
-      # 1. Checkout the original developer's repository directly
       - name: Checkout upstream repository
         uses: actions/checkout@v4
         with:
           repository: BKSalman/ytdlp-gui
           ref: main
 
-      # 2. Spin up an emulated Arch Linux aarch64 container inside Ubuntu
+      # Updated to v3 to fix the Node 20 warning
       - name: Build in Arch Linux ARM container
-        uses: uraimo/run-on-arch-action@v2
+        uses: uraimo/run-on-arch-action@v3 
         with:
           arch: aarch64
-          distro: archlinux_latest
+          # Fixed the distribution name to Arch ARM
+          distro: archarm_latest 
           githubToken: ${{ github.token }}
-          # 3. Install dependencies (added gtk3 and cmake for the GUI) and compile
           run: |
             pacman -Syu --noconfirm base-devel rustup git pkgconf gtk3 cmake
             rustup toolchain install stable
             rustup default stable
             cargo build --release
             
-            # Move the binary out so GitHub can grab it
             cp target/release/ytdlp-gui ./ytdlp-gui-aarch64
 
-      # 4. Upload the finished binary as an artifact
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
